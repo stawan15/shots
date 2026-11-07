@@ -141,6 +141,32 @@ let weakName = Namer.name(for: weak, extra: [], isCapture: true)
 name = weakName ?? named(facts(["weak fallback"]), "weak")
 expect(Namer.rule(for: weak, extra: []) == nil, "a single weak keyword is not enough to route")
 
+group("content hashing")
+
+// FIPS 180-4 vectors: duplicate detection is only as good as the hash.
+let vectors: [(String, String)] = [
+    ("", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"),
+    ("abc", "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"),
+    ("abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq",
+     "248d6a61d20638b8e5c026930c3e6039a33ce45964ff2167f6ecedd419db06c1"),
+]
+for (input, expected) in vectors {
+    let url = URL(fileURLWithPath: NSTemporaryDirectory())
+        .appendingPathComponent("shots-hash-\(UUID().uuidString).bin")
+    try? Data(input.utf8).write(to: url)
+    equal(Shots.contentHash(url) ?? "nil", expected, "sha256 of \(input.count) bytes")
+    try? FileManager.default.removeItem(at: url)
+}
+
+// One megabyte of 'a' crosses many blocks and catches length-encoding bugs.
+let big = URL(fileURLWithPath: NSTemporaryDirectory())
+    .appendingPathComponent("shots-hash-big-\(UUID().uuidString).bin")
+try? Data(repeating: 0x61, count: 1_000_000).write(to: big)
+equal(Shots.contentHash(big) ?? "nil",
+      "cdc76e5c9914fb9281a1c7e284d73e67f1809a48a497200e046d39ccc7112cd0",
+      "sha256 of 1 MB")
+try? FileManager.default.removeItem(at: big)
+
 print("")
 if failures == 0 {
     print("✓ \(checks) checks passed")

@@ -1,4 +1,4 @@
-import CryptoKit
+
 import Foundation
 
 // MARK: - Shared engine
@@ -152,12 +152,14 @@ public enum Shots {
     }
 
     /// SHA-256 of the file bytes, used to spot shots you captured twice.
+    /// Implemented locally rather than with CryptoKit so the engine builds and its
+    /// checks run on Linux CI as well as macOS.
     public static func contentHash(_ url: URL) -> String? {
         guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
         defer { try? handle.close() }
         var hasher = SHA256()
         while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
-            hasher.update(data: chunk)
+            hasher.update([UInt8](chunk))
         }
         return hasher.finalize().map { String(format: "%02x", $0) }.joined()
     }
