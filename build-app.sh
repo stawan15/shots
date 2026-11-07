@@ -14,6 +14,14 @@ VERSION="${VERSION:-$(grep -o 'current = "[^"]*"' Sources/ShotsCore/Version.swif
 BUNDLE_ID="com.teveus.shots"
 
 echo "building $APP_NAME $VERSION (universal)..."
+# The CLI ships inside the bundle too: `shots update` installs from this DMG, so it
+# needs a copy of the tool to copy out.
+if swift build -c release --product shots --arch arm64 --arch x86_64 2>/dev/null; then
+  CLI=".build/out/Products/Release/shots"
+else
+  swift build -c release --product shots
+  CLI=".build/release/shots"
+fi
 # Universal so the same DMG runs on Apple silicon and Intel.
 if swift build -c release --product ShotsApp --arch arm64 --arch x86_64 2>/dev/null; then
   BIN=".build/out/Products/Release/ShotsApp"
@@ -25,8 +33,11 @@ fi
 
 echo "assembling $BUNDLE"
 rm -rf "$BUNDLE"
-mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
+# The CLI goes in Resources/bin, not MacOS: the volume is case-insensitive, so
+# Contents/MacOS/shots would collide with Contents/MacOS/Shots and silently win.
+mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources/bin"
 cp "$BIN" "$BUNDLE/Contents/MacOS/$APP_NAME"
+cp "$CLI" "$BUNDLE/Contents/Resources/bin/shots"
 lipoinfo=$(lipo -info "$BUNDLE/Contents/MacOS/$APP_NAME" 2>/dev/null || true)
 [ -n "$lipoinfo" ] && echo "  $lipoinfo"
 

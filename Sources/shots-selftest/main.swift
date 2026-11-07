@@ -167,6 +167,21 @@ equal(Shots.contentHash(big) ?? "nil",
       "sha256 of 1 MB")
 try? FileManager.default.removeItem(at: big)
 
+group("versions")
+
+// The updater refuses to install anything older than what is running, so these
+// comparisons decide whether a release is offered at all.
+expect(SemanticVersion("1.2.0") > SemanticVersion("1.1.0"), "1.2.0 is newer than 1.1.0")
+expect(SemanticVersion("1.10.0") > SemanticVersion("1.9.0"), "numeric, not string, comparison")
+expect(SemanticVersion("v1.2.0") == SemanticVersion("1.2.0"), "leading v is ignored")
+expect(SemanticVersion("1.2.0-b2") < SemanticVersion("1.2.0"), "pre-release sorts before release")
+expect(SemanticVersion("1.2") == SemanticVersion("1.2.0"), "missing patch is zero")
+expect(SemanticVersion("1.2.0") == SemanticVersion("1.2.0"), "same version compares equal")
+expect(!(SemanticVersion("1.1.0") > SemanticVersion("1.1.0")), "never offers the same version")
+expect(SemanticVersion("2.0.0-beta") > SemanticVersion("1.9.9"), "major bumps outrank everything")
+equal(SemanticVersion("1.2.3").description, "1.2.3", "description round trip")
+equal(SemanticVersion("v1.2.3-rc1").description, "1.2.3-rc1", "description keeps pre-release")
+
 print("")
 if failures == 0 {
     print("✓ \(checks) checks passed")

@@ -33,6 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             DispatchQueue.main.async { self?.updateBadge() }
         }
         updateBadge()
+        UpdateController.checkIfDue()
     }
 
     /// Left click opens the popover; right click opens a menu with Quit, so the app
@@ -61,6 +62,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             action: nil, keyEquivalent: "")
         version.isEnabled = false
         menu.addItem(version)
+
+        menu.addItem(.separator())
+
+        let updates = NSMenuItem(
+            title: "Check for Updates…", action: #selector(checkForUpdates), keyEquivalent: "")
+        updates.target = self
+        menu.addItem(updates)
+
+        let automatic = NSMenuItem(
+            title: "Check Automatically", action: #selector(toggleAutomaticChecks), keyEquivalent: "")
+        automatic.target = self
+        automatic.state = Updater.automaticChecksEnabled ? .on : .off
+        menu.addItem(automatic)
 
         menu.addItem(.separator())
 
@@ -94,6 +108,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 attributes: [.font: NSFont.systemFont(ofSize: 11)]),
         ])
         NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func checkForUpdates() {
+        UpdateController.check(interactive: true)
+    }
+
+    @objc private func toggleAutomaticChecks() {
+        Updater.automaticChecksEnabled.toggle()
     }
 
     @objc private func scanNow() { store.refresh() }

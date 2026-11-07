@@ -470,17 +470,121 @@ func runDebug(_ arguments: [String], config: Config) {
     }
 }
 
+// MARK: - update
+
+/// `shots update` upgrades the CLI in place. It replaces the binary it was launched
+/// from, so it installs the new copy alongside the old one and lets the shell pick
+/// it up on the next run.
+func runUpdate(_ arguments: [String]) {
+    let checkOnly = arguments.contains("--check")
+
+    Task {
+        do {
+            let release = try await Updater.latestRelease()
+            let current = SemanticVersion(ShotsVersion.current)
+
+            guard release.version > current else {
+                print(green("up to date ") + dim("(shots \(current))"))
+                exit(0)
+            }
+
+            print("\(bold("Shots \(release.version)")) \(dim("is available; you have \(current)"))")
+            if checkOnly { exit(0) }
+
+            if !arguments.contains("--yes") {
+                print(dim("run `shots update --yes` to install it"))
+                exit(0)
+            }
+
+            print(dim("downloading…"))
+            let dmg = try await Updater.download(release)
+
+            // The app bundle inside the DMG carries the CLI in Contents/MacOS, so
+            // extract it rather than duplicating the download logic here.
+            print(dim("installing…"))
+            try installCLI(from: dmg)
+
+            print(green("installed ") + "shots \(release.version)")
+            print(dim("restart your shell if `which shots` still points somewhere else"))
+            exit(0)
+        } catch {
+            fail("\(error)")
+        }
+    }
+
+    // Keep the process alive while the async work runs.
+    RunLoop.main.run()
+}
+
+/// Mounts the release DMG and copies its CLI to wherever this binary lives.
+func installCLI(from dmg: URL) throws {
+    let manager = FileManager.default
+    let mountPoint = manager.temporaryDirectory
+        .appendingPathComponent("shots-cli-\(UUID().uuidString.prefix(8))")
+    try manager.createDirectory(at: mountPoint, withIntermediateDirectories: true)
+    defer {
+        try? manager.removeItem(at: dmg)
+        try? manager.removeItem(at: mountPoint)
+    }
+
+    try runProcess("/usr/bin/hdiutil", [
+        "attach", dmg.path, "-mountpoint", mountPoint.path, "-nobrowse", "-quiet",
+    ])
+    defer { try? runProcess("/usr/bin/hdiutil", ["detach", mountPoint.path, "-quiet"]) }
+
+    let contents = (try? manager.contentsOfDirectory(at: mountPoint, includingPropertiesForKeys: nil)) ?? []
+    guard let app = contents.first(where: { $0.pathExtension == "app" }) else {
+        throw Updater.UpdateError.installFailed("the dmg does not contain an application")
+    }
+    let bundledCLI = app.appendingPathComponent("Contents/Resources/bin/shots")
+    guard manager.fileExists(atPath: bundledCLI.path) else {
+        throw Updater.UpdateError.installFailed("this release does not bundle the command-line tool")
+    }
+
+    // Replace the binary in place: write beside it, then move over the original,
+    // which keeps the existing permissions and any symlink in ~/.local/bin.
+    let me = URL(fileURLWithPath: CommandLine.arguments[0]).resolvingSymlinksInPath()
+    let staged = me.deletingLastPathComponent()
+        .appendingPathComponent(".shots-new-\(UUID().uuidString.prefix(8))")
+    try manager.copyItem(at: bundledCLI, to: staged)
+    _ = try? runProcess("/usr/bin/xattr", ["-dr", "com.apple.quarantine", staged.path])
+    _ = try? runProcess("/usr/bin/codesign", ["--force", "--sign", "-", staged.path])
+    do {
+        try manager.removeItem(at: me)
+        try manager.moveItem(at: staged, to: me)
+    } catch {
+        try? manager.removeItem(at: staged)
+        throw Updater.UpdateError.installFailed(
+            "could not replace \(me.path): \(error.localizedDescription)")
+    }
+}
+
+private func runProcess(_ path: String, _ arguments: [String]) throws {
+    let process = Process()
+    process.executableURL = URL(fileURLWithPath: path)
+    process.arguments = arguments
+    process.standardOutput = FileHandle.nullDevice
+    process.standardError = FileHandle.nullDevice
+    try process.run()
+    process.waitUntilExit()
+    guard process.terminationStatus == 0 else {
+        throw Updater.UpdateError.installFailed("\(path) exited \(process.terminationStatus)")
+    }
+}
+
 // MARK: - Entry point
 
 let arguments = Array(CommandLine.arguments.dropFirst())
 var config = Config.load()
 
-// `config` and `agent` take their own subcommand flags (--add-source, install),
-// so they are dispatched before the global option parser sees them.
+// `config`, `agent` and `update` take their own subcommand flags (--add-source,
+// install, --check), so they are dispatched before the global option parser sees them.
 switch arguments.first {
 case "config":
     runConfig(Array(arguments.dropFirst()), config: config)
     exit(0)
+case "update":
+    runUpdate(Array(arguments.dropFirst()))
 case "agent":
     runAgent(Array(arguments.dropFirst()))
     exit(0)
