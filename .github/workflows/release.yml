@@ -1,0 +1,45 @@
+name: Release
+
+# macOS runners on this account are cancelled immediately (no paid macOS minutes),
+# so release artefacts are built and attached by hand from a Mac:
+#
+#   git tag v1.1.0 && git push --tags
+#   ./build-dmg.sh
+#   gh release create v1.1.0 dist/Shots.dmg --title "Shots v1.1.0" --notes-file CHANGELOG.md
+#
+# This workflow only verifies the tag matches the version in the source. Enable
+# the build job below once macOS minutes are available.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  verify_tag:
+    runs-on: ubuntu-latest
+    container: swift:6.0
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Tag matches Sources/ShotsCore/Version.swift
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          SOURCE=$(grep -o 'current = "[^"]*"' Sources/ShotsCore/Version.swift | cut -d'"' -f2)
+          echo "tag: $TAG  source: $SOURCE"
+          if [ "$TAG" != "$SOURCE" ]; then
+            echo "::error::tag $TAG does not match version $SOURCE in Version.swift"
+            exit 1
+          fi
+
+      - name: Build and run the checks
+        run: swift build -c release --product shots-selftest && .build/release/shots-selftest
+
+  macos_release:
+    runs-on: macos-14
+    if: false
+    steps:
+      - uses: actions/checkout@v4
+      - run: ./build-dmg.sh
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/Shots.dmg

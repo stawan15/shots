@@ -24,8 +24,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         if let button = statusItem.button {
-            button.action = #selector(togglePopover)
+            button.action = #selector(statusItemClicked)
             button.target = self
+            button.sendAction(on: [.leftMouseUp, .rightMouseUp])
         }
 
         store.onChange = { [weak self] in
@@ -33,6 +34,75 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         updateBadge()
     }
+
+    /// Left click opens the popover; right click opens a menu with Quit, so the app
+    /// can be closed without Force Quit or killing the process.
+    @objc private func statusItemClicked() {
+        let event = NSApp.currentEvent
+        let isRightClick = event?.type == .rightMouseUp
+            || event?.modifierFlags.contains(.control) == true
+        if isRightClick {
+            showMenu()
+        } else {
+            togglePopover()
+        }
+    }
+
+    private func showMenu() {
+        closePopover()
+        let menu = NSMenu()
+
+        let about = NSMenuItem(title: "About Shots", action: #selector(showAbout), keyEquivalent: "")
+        about.target = self
+        menu.addItem(about)
+
+        let version = NSMenuItem(
+            title: "Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev")",
+            action: nil, keyEquivalent: "")
+        version.isEnabled = false
+        menu.addItem(version)
+
+        menu.addItem(.separator())
+
+        let scan = NSMenuItem(title: "Scan Now", action: #selector(scanNow), keyEquivalent: "r")
+        scan.target = self
+        menu.addItem(scan)
+
+        let folder = NSMenuItem(title: "Open Screenshots Folder", action: #selector(openFolder), keyEquivalent: "")
+        folder.target = self
+        menu.addItem(folder)
+
+        menu.addItem(.separator())
+
+        let quit = NSMenuItem(title: "Quit Shots", action: #selector(quit), keyEquivalent: "q")
+        quit.target = self
+        menu.addItem(quit)
+
+        // Attaching the menu before popping it up makes the item highlight behave.
+        statusItem.menu = menu
+        statusItem.button?.performClick(nil)
+        statusItem.menu = nil
+    }
+
+    @objc private func showAbout() {
+        let version = Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "dev"
+        NSApp.orderFrontStandardAboutPanel(options: [
+            .applicationName: "Shots",
+            .applicationVersion: version,
+            .credits: NSAttributedString(
+                string: "Names and files your screenshots on-device with Apple Vision.\nhttps://github.com/stawan15/shots",
+                attributes: [.font: NSFont.systemFont(ofSize: 11)]),
+        ])
+        NSApp.activate(ignoringOtherApps: true)
+    }
+
+    @objc private func scanNow() { store.refresh() }
+
+    @objc private func openFolder() {
+        NSWorkspace.shared.open(URL(fileURLWithPath: store.config.destination))
+    }
+
+    @objc private func quit() { NSApp.terminate(nil) }
 
     /// Shows the pending count next to the icon so the work is visible at a glance.
     private func updateBadge() {

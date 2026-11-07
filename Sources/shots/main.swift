@@ -504,7 +504,7 @@ case "watch", "daemon":
 case "debug":
     runDebug(Array(arguments.dropFirst()), config: config)
 case "version":
-    print("shots 1.0.0")
+    print("shots \(ShotsVersion.current)")
 default:
     print(usage)
 }
