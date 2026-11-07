@@ -161,6 +161,11 @@ func collect(_ options: Options, config: Config) -> [URL] {
 
     var found: [URL] = []
     for dir in dirs {
+        guard FileManager.default.fileExists(atPath: dir.path) else {
+            FileHandle.standardError.write(
+                Data(yellow("no such folder: \(dir.path)\n").utf8))
+            continue
+        }
         guard let contents = try? FileManager.default.contentsOfDirectory(
             at: dir,
             includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
@@ -337,9 +342,11 @@ let usage = """
   shots undo                  move the last applied batch back
   shots list                  list previous batches
   shots watch [--interval 30] keep filing new screenshots in the background
-  shots agent [install|uninstall|status]
+  shots agent install|status|log|uninstall
                               run `watch` automatically at login (launchd)
   shots config [--print|--edit|--layout day|topic|both|--add-source DIR]
+  shots debug PATH            show OCR, Vision labels and the chosen name
+  shots version
 
 \(bold("OPTIONS"))
   -d, --dir DIR      folder to scan (repeatable, default from config)
@@ -354,6 +361,10 @@ let usage = """
   day    ~/Screenshots/2026-11-06/2026-11-06-1345-grafana-cpu-panel.png
   topic  ~/Screenshots/monitoring/2026-11-06-1345-grafana-cpu-panel.png
   both   ~/Screenshots/monitoring/2026-11-06/2026-11-06-1345-grafana-cpu-panel.png
+
+\(bold("FILES"))
+  ~/.config/shots/config.json          sources, destination, layout, custom rules
+  ~/.local/share/shots/journal-*.json  undo journals, one per batch
 """
 
 func runPlan(_ options: Options, config: Config, apply: Bool) {

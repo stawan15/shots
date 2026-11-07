@@ -42,8 +42,73 @@ Or run that automatically at login:
 ```sh
 shots agent install    # launchd job, checks once a minute
 shots agent status
+shots agent log        # what it has filed lately
 shots agent uninstall
 ```
+
+## Full command reference
+
+| Command | What it does |
+| --- | --- |
+| `shots plan` | Dry run. Prints every source → destination, groups by folder. Accepts all the flags below. |
+| `shots apply --yes` | Performs the plan and writes an undo journal. Without `--yes` it only prints what it would move. |
+| `shots undo` | Reverts the most recent batch, restoring original filenames and locations, then deletes that journal entry. Run it repeatedly to walk back further. |
+| `shots list` | Lists past batches, newest first. |
+| `shots watch` | Long-running loop that files new screenshots. `--interval N` seconds between checks (min 5, default 30). Files are left alone for 5s after capture so the screenshot tool can finish writing. |
+| `shots agent install` | Installs a launchd job (`~/Library/LaunchAgents/com.teveus.shots.plist`) that runs `watch --interval 60` at login. |
+| `shots agent status` | Shows whether the job is installed and its launchd state. |
+| `shots agent log` | Tails the last 40 lines of the agent's log. |
+| `shots agent uninstall` | Boots the job out and deletes the plist. |
+| `shots config` | Prints the current config. |
+| `shots config --edit` | Opens `~/.config/shots/config.json` in `$EDITOR`. |
+| `shots config --layout day\|topic\|both` | Sets the default layout. |
+| `shots config --add-source DIR` | Adds a folder to scan (`--remove-source DIR` to drop it). |
+| `shots config --destination DIR` | Changes the destination root. |
+| `shots config --print` | Prints the config after applying any other config flags given on the same line. |
+| `shots debug PATH` | Dumps OCR lines, Vision labels, and the resulting name for one file. Use this when a name looks wrong. |
+| `shots version` | Prints the version. |
+
+### Flags (for `plan`, `apply`, `watch`)
+
+| Flag | Meaning |
+| --- | --- |
+| `-d`, `--dir DIR` | Folder to scan. Repeatable. Defaults to `sources` in the config. |
+| `--to DIR` | Destination root for this run only (does not change the config). |
+| `--layout MODE` | `day`, `topic` or `both` for this run only. |
+| `--all` | Also move images that do not look like screenshots (photos, exported diagrams). |
+| `-y`, `--yes` | Required for `apply` to actually move files. |
+| `--json` | Emit the plan as JSON (source, destination, folder, created). Useful for scripting; `apply --json` still applies. |
+| `-q`, `--quiet` | No progress output. |
+
+### Common recipes
+
+```sh
+# see what would happen, then do it
+shots plan && shots apply --yes
+
+# organise a different folder once, into a scratch tree
+shots plan  --dir ~/Pictures/inbox --to ~/Screenshots/inbox
+shots apply --dir ~/Pictures/inbox --to ~/Screenshots/inbox --yes
+
+# keep it automatic
+shots agent install
+
+# something got named badly — find out why
+shots debug ~/Screenshots/2026-11-06/*docker*.png
+
+# a new project you want recognised
+shots config --edit      # add {"folder":"work/client-a","tag":"clienta","keywords":["acme portal"]}
+```
+
+### Where things live
+
+| Path | Contents |
+| --- | --- |
+| `~/.local/bin/shots` | The binary (installed by `install.sh`). |
+| `~/.config/shots/config.json` | Sources, destination, layout, language list, your custom rules. |
+| `~/.local/share/shots/journal-*.json` | One file per applied batch. `shots undo` consumes these. |
+| `~/Library/LaunchAgents/com.teveus.shots.plist` | The background job, if installed. |
+| `~/.local/share/shots/agent.log` | Output from the background job. |
 
 ## How it decides
 
