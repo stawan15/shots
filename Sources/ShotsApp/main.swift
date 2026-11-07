@@ -212,6 +212,33 @@ if let flag = CommandLine.arguments.firstIndex(of: "--preview") {
     }
 }
 
+// `Shots --install-update <dmg> [--target <app>]` performs the update swap without
+// any UI. Used to verify the updater end to end, since the alert flow is not
+// reachable from a script.
+if let flag = CommandLine.arguments.firstIndex(of: "--install-update") {
+    app.setActivationPolicy(.prohibited)
+    let dmgPath = flag + 1 < CommandLine.arguments.count ? CommandLine.arguments[flag + 1] : ""
+    guard !dmgPath.isEmpty else {
+        FileHandle.standardError.write(Data("--install-update needs a dmg path\n".utf8))
+        exit(1)
+    }
+    var target = Bundle.main.bundleURL
+    if let targetFlag = CommandLine.arguments.firstIndex(of: "--target"),
+       targetFlag + 1 < CommandLine.arguments.count {
+        target = URL(fileURLWithPath: CommandLine.arguments[targetFlag + 1])
+    }
+    print("installing \(dmgPath) -> \(target.path)")
+    do {
+        try Updater.install(
+            dmg: URL(fileURLWithPath: dmgPath), target: target, relaunch: false)
+        print("installed")
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(Data("failed: \(error)\n".utf8))
+        exit(1)
+    }
+}
+
 // `Shots --once` scans, files everything, and exits. Handy for launchd jobs and for
 // checking the app path without touching the UI.
 if CommandLine.arguments.contains("--once") {

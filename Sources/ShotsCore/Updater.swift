@@ -169,7 +169,9 @@ public enum Updater {
             }
         }
 
-        let destination = directory.appendingPathComponent("Shots-\(release.version).dmg")
+        // The temporary download is deleted by `install`, so keep it clearly ours.
+        let destination = directory.appendingPathComponent(
+            "ShotsDownload-\(release.version)-\(UUID().uuidString.prefix(6)).dmg")
         try? FileManager.default.removeItem(at: destination)
         try data.write(to: destination)
         return destination
@@ -180,6 +182,8 @@ public enum Updater {
     /// Replacing a running app from inside itself is the awkward part of any
     /// self-updater; the copy-aside dance below keeps the new bundle intact even if
     /// the swap fails half way through.
+    /// `dmg` is left alone: only `download` cleans up after itself, so passing a
+    /// file you care about (the release artefact, for instance) is safe.
     public static func install(
         dmg: URL,
         target: URL = Bundle.main.bundleURL,
@@ -189,8 +193,6 @@ public enum Updater {
         let mountPoint = manager.temporaryDirectory
             .appendingPathComponent("shots-update-\(UUID().uuidString.prefix(8))")
         try manager.createDirectory(at: mountPoint, withIntermediateDirectories: true)
-
-        defer { try? manager.removeItem(at: dmg) }
 
         var detach: () -> Void = {
             try? runTool("/usr/bin/hdiutil", ["detach", mountPoint.path, "-quiet"])
@@ -243,6 +245,19 @@ public enum Updater {
             throw UpdateError.installFailed(
                 "could not replace the app at \(target.path). "
                 + "If it is in /Applications, check that you have permission to write there.")
+        }
+
+        // Confirm the swap actually happened rather than trusting the move: a
+        // partial copy that still looks like success is the worst outcome here.
+        let installed = (try? target.resourceValues(forKeys: [.contentModificationDateKey]))
+            .flatMap { _ in Bundle(url: target) }
+        if installed == nil || !manager.fileExists(
+            atPath: target.appendingPathComponent("Contents/Info.plist").path) {
+            if manager.fileExists(atPath: backup.path) {
+                try? manager.removeItem(at: target)
+                try? manager.moveItem(at: backup, to: target)
+            }
+            throw UpdateError.installFailed("the new bundle is not a valid application; rolled back")
         }
 
         // Clear the quarantine flag the download picked up, or Gatekeeper will

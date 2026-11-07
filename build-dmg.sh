@@ -17,9 +17,16 @@ STAGE="$(mktemp -d)"
 
 trap 'rm -rf "$STAGE"' EXIT
 
-if [ ! -d "$APP" ]; then
-  echo "no $APP — running build-app.sh first"
-  VERSION="$VERSION" ./build-app.sh
+# Always rebuild: staging whatever happens to be in dist/ previously shipped a
+# DMG containing the previous version.
+echo "rebuilding the app bundle"
+VERSION="$VERSION" ./build-app.sh
+
+STAGED_VERSION=$(/usr/libexec/PlistBuddy -c "Print :CFBundleShortVersionString" \
+  "$APP/Contents/Info.plist" 2>/dev/null || echo unknown)
+if [ "$STAGED_VERSION" != "$VERSION" ]; then
+  echo "error: bundle reports $STAGED_VERSION but expected $VERSION" >&2
+  exit 1
 fi
 
 echo "staging $APP_NAME $VERSION"

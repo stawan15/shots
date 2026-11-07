@@ -523,7 +523,10 @@ func installCLI(from dmg: URL) throws {
         .appendingPathComponent("shots-cli-\(UUID().uuidString.prefix(8))")
     try manager.createDirectory(at: mountPoint, withIntermediateDirectories: true)
     defer {
-        try? manager.removeItem(at: dmg)
+        // The download is ours to clean up; a user-supplied path is not.
+        if dmg.lastPathComponent.hasPrefix("ShotsDownload-") {
+            try? manager.removeItem(at: dmg)
+        }
         try? manager.removeItem(at: mountPoint)
     }
 
