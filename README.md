@@ -34,6 +34,7 @@ into folders by topic or by day.
 - [Usage](#usage)
   - [Menu-bar app](#menu-bar-app)
   - [Command line](#command-line)
+- [Updates](#updates)
 - [How it works](#how-it-works)
 - [Organisation layouts](#organisation-layouts)
 - [Configuration](#configuration)
@@ -117,7 +118,7 @@ Shots lives in the menu bar and has no Dock icon.
 | Action | Result |
 | --- | --- |
 | Left-click the icon | Opens the popover with pending screenshots |
-| Right-click the icon | Menu: About, Scan Now, Open Screenshots Folder, Quit |
+| Right-click the icon | Menu: About, Check for Updates, Scan Now, Open Screenshots Folder, Quit |
 | Checkbox per row | Include or exclude that screenshot from the next filing |
 | **File All** | Moves the checked screenshots and writes an undo journal |
 | **Undo** | Restores the most recent batch to its original paths |
@@ -143,6 +144,35 @@ Keep it running in the background:
 shots watch --interval 20      # foreground loop
 shots agent install            # launchd job that starts at login
 ```
+
+## Updates
+
+Shots updates itself.
+
+- **Check for Updates…** in the right-click menu shows the release notes and installs
+  in one click.
+- A check runs at most once a day at launch and says nothing when you are current.
+  Turn it off with **Check Automatically** in the same menu.
+- The download is verified against the SHA-256 digest GitHub publishes for the
+  release before anything is executed. A mismatch aborts the install.
+- The swap is transactional: the previous bundle is kept aside and restored if the
+  install fails, so a bad update cannot leave you without a working app.
+- After installing, the quarantine flag is cleared and the bundle is re-signed ad-hoc
+  so Gatekeeper still launches it.
+
+From the command line:
+
+```sh
+shots update --check     # report whether a newer version exists
+shots update             # prompt, then install
+shots update --yes       # install without prompting
+```
+
+The CLI replaces the binary it was launched from, keeping its location and
+permissions, and pulls the new copy out of the release DMG.
+
+> Version 1.1.0 shipped before the updater existed, so it needs a single manual
+> download. Every version from 1.2.0 onwards can update itself.
 
 ## How it works
 
@@ -234,6 +264,7 @@ shots config --print
 | `shots agent install` | Installs the launchd job. Also `status`, `log`, `uninstall`. |
 | `shots config` | Reads or changes settings. |
 | `shots debug PATH` | Prints OCR lines, Vision labels and the chosen name. |
+| `shots update` | Checks for and installs a newer release. Also `--check`, `--yes`. |
 | `shots version` | Prints the version. |
 
 Options for `plan`, `apply` and `watch`:
