@@ -525,17 +525,26 @@ func runWatch(_ options: Options, config: Config, interval: TimeInterval) {
 func runConfig(_ arguments: [String], config: Config) {
     var config = config
     var index = 0
-    if arguments.isEmpty || arguments.contains("--print") {
+
+    func printConfig() {
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
         if let data = try? encoder.encode(config) {
             print(String(data: data, encoding: .utf8) ?? "{}")
         }
         print(dim("\nfile: \(Config.defaultPath.path)"))
+    }
+
+    if arguments.isEmpty || arguments == ["--print"] {
+        printConfig()
         return
     }
+
     while index < arguments.count {
         switch arguments[index] {
+        case "--print":
+            // Applied after any changes on the same command line.
+            break
         case "--layout":
             index += 1
             guard index < arguments.count, ["day", "topic", "both"].contains(arguments[index]) else {
@@ -557,7 +566,11 @@ func runConfig(_ arguments: [String], config: Config) {
             guard index < arguments.count else { fail("--destination expects a directory") }
             config.destination = (arguments[index] as NSString).expandingTildeInPath
         case "--edit":
-            try? config.save()
+            do {
+                try config.save()
+            } catch {
+                fail("could not write config: \(error.localizedDescription)")
+            }
             let editor = ProcessInfo.processInfo.environment["EDITOR"] ?? "vim"
             let process = Process()
             process.executableURL = URL(fileURLWithPath: "/usr/bin/env")
@@ -572,7 +585,11 @@ func runConfig(_ arguments: [String], config: Config) {
     }
     do {
         try config.save()
-        print(green("saved ") + Config.defaultPath.path)
+        if arguments.contains("--print") {
+            printConfig()
+        } else {
+            print(green("saved ") + Config.defaultPath.path)
+        }
     } catch {
         fail("could not save config: \(error.localizedDescription)")
     }
@@ -650,6 +667,14 @@ func runAgent(_ arguments: [String]) {
         try? FileManager.default.removeItem(at: agentPlist)
         print(green("agent removed"))
 
+    case "log":
+        let log = Journal.directory.appendingPathComponent("agent.log")
+        guard let text = try? String(contentsOf: log, encoding: .utf8) else {
+            print(dim("no agent log yet"))
+            return
+        }
+        print(text.split(separator: "\n").suffix(40).joined(separator: "\n"))
+
     default:
         if FileManager.default.fileExists(atPath: agentPlist.path) {
             print("agent: \(green("installed")) " + dim(agentPlist.path))
@@ -667,8 +692,22 @@ func runAgent(_ arguments: [String]) {
 // MARK: - Entry point
 
 let arguments = Array(CommandLine.arguments.dropFirst())
-let (command, options) = parse(arguments)
 var config = Config.load()
+
+// `config` and `agent` take their own subcommand flags (--add-source, install),
+// so they are dispatched before the global option parser sees them.
+let firstWord = arguments.first
+if firstWord == "config" || firstWord == "agent" {
+    let rest = Array(arguments.dropFirst())
+    if firstWord == "config" {
+        runConfig(rest, config: config)
+    } else {
+        runAgent(rest)
+    }
+    exit(0)
+}
+
+let (command, options) = parse(arguments)
 
 switch command {
 case "plan", "scan", "dry-run":
@@ -681,12 +720,6 @@ case "list", "batches":
     runList()
 case "watch", "daemon":
     runWatch(options, config: config, interval: options.interval)
-case "config":
-    let rest = arguments.drop(while: { $0 != "config" }).dropFirst()
-    runConfig(Array(rest), config: config)
-case "agent":
-    let rest = arguments.drop(while: { $0 != "agent" }).dropFirst()
-    runAgent(Array(rest))
 case "version":
     print("shots 1.0.0")
 case "debug":
