@@ -7,30 +7,27 @@ on:
   workflow_dispatch:
 
 jobs:
-  # The self-checks are pure Swift with no AppKit, so they run on Linux where
-  # hosted runners are free. The macOS app target is only built by hand, because
-  # macOS runners need paid minutes on this account.
+  # The naming engine is pure Swift with no AppKit or Vision dependency, so its
+  # checks run on Linux where hosted runners are free. macOS runners are billed
+  # per minute and are cancelled immediately on this account, so the macOS-only
+  # build stays local (or becomes a job here once minutes are available).
   selftest:
     runs-on: ubuntu-latest
     container: swift:6.0
     steps:
       - uses: actions/checkout@v4
 
-      - name: Show Swift version
+      - name: Swift version
         run: swift --version
 
-      # ShotsCore imports AppKit + Vision, which do not exist on Linux. The check
-      # runner therefore only validates what is portable, and skips the rest.
-      - name: Check the package manifest parses
-        run: swift package dump-package > /dev/null
+      - name: Build the naming engine
+        run: swift build -c release --product shots-selftest
 
-      - name: Report platform
-        run: |
-          echo "Self-checks require macOS (AppKit + Vision)."
-          echo "Run them locally with: swift run -c release shots-selftest"
+      - name: Run the checks
+        run: .build/release/shots-selftest
 
-  # Kept in the file as documentation of the real verification path; enable by
-  # removing the `if: false` guard once macOS runner minutes are available.
+  # Enable by removing `if: false` when macOS runner minutes are available.
+  # This is the real verification path: Vision, the app bundle and its rendering.
   macos:
     runs-on: macos-14
     if: false
