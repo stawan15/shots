@@ -1,4 +1,8 @@
 import Foundation
+// URLSession lives in a separate module on Linux, which is where the CI checks run.
+#if canImport(FoundationNetworking)
+import FoundationNetworking
+#endif
 
 /// Semantic version, compared numerically so 1.10.0 is newer than 1.9.0 (which a
 /// string comparison gets wrong).
