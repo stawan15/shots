@@ -13,13 +13,22 @@ BUNDLE="$DIST/$APP_NAME.app"
 VERSION="${VERSION:-$(grep -o 'current = "[^"]*"' Sources/ShotsCore/Version.swift | cut -d'"' -f2)}"
 BUNDLE_ID="com.teveus.shots"
 
-echo "building $APP_NAME $VERSION..."
-swift build -c release --product ShotsApp
+echo "building $APP_NAME $VERSION (universal)..."
+# Universal so the same DMG runs on Apple silicon and Intel.
+if swift build -c release --product ShotsApp --arch arm64 --arch x86_64 2>/dev/null; then
+  BIN=".build/out/Products/Release/ShotsApp"
+else
+  echo "note: universal build unavailable, falling back to the host architecture"
+  swift build -c release --product ShotsApp
+  BIN=".build/release/ShotsApp"
+fi
 
 echo "assembling $BUNDLE"
 rm -rf "$BUNDLE"
 mkdir -p "$BUNDLE/Contents/MacOS" "$BUNDLE/Contents/Resources"
-cp .build/release/ShotsApp "$BUNDLE/Contents/MacOS/$APP_NAME"
+cp "$BIN" "$BUNDLE/Contents/MacOS/$APP_NAME"
+lipoinfo=$(lipo -info "$BUNDLE/Contents/MacOS/$APP_NAME" 2>/dev/null || true)
+[ -n "$lipoinfo" ] && echo "  $lipoinfo"
 
 if [ -f assets/Shots.icns ]; then
   cp assets/Shots.icns "$BUNDLE/Contents/Resources/Shots.icns"
