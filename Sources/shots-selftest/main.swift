@@ -90,7 +90,7 @@ name = named(keycloak, "keycloak", extra: [], isCapture: true)
 equal(name.folder, "auth", "login page goes to auth")
 
 let shell = facts([
-    "deploy@web-01:~$ docker exec -it app cat /azurefunctionshost",
+    "deploy@web-01:~$ docker exec -it app cat /etc/app.conf",
     "sudo apt update",
 ])
 name = named(shell, "shell", extra: [], isCapture: true)
