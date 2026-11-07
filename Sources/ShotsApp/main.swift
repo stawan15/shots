@@ -1,0 +1,150 @@
+import AppKit
+import ShotsCore
+
+/// Menu-bar entry point. The app has no Dock icon and no main window: it lives as a
+/// status item that opens the filing popover. Written in AppKit because the
+/// CommandLineTools toolchain on this machine has no SwiftUI macros.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private var statusItem: NSStatusItem!
+    private var popover: NSPopover!
+    private var store: ShotsStore!
+    private var controller: PopoverViewController!
+    private var eventMonitor: Any?
+
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        NSApp.setActivationPolicy(.accessory)
+
+        store = ShotsStore()
+        controller = PopoverViewController(store: store)
+
+        popover = NSPopover()
+        popover.contentViewController = controller
+        popover.behavior = .transient
+        popover.animates = true
+
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        if let button = statusItem.button {
+            button.action = #selector(togglePopover)
+            button.target = self
+        }
+
+        store.onChange = { [weak self] in
+            DispatchQueue.main.async { self?.updateBadge() }
+        }
+        updateBadge()
+    }
+
+    /// Shows the pending count next to the icon so the work is visible at a glance.
+    private func updateBadge() {
+        guard let button = statusItem.button else { return }
+        let count = store?.plan.items.count ?? 0
+        let symbol = count > 0 ? "photo.badge.checkmark" : "photo.on.rectangle.angled"
+        let image = NSImage(systemSymbolName: symbol, accessibilityDescription: "Shots")
+        image?.isTemplate = true
+        button.image = image
+        button.title = count > 0 ? " \(count)" : ""
+        button.imagePosition = .imageLeading
+        button.font = .systemFont(ofSize: 11, weight: .medium)
+    }
+
+    @objc private func togglePopover() {
+        guard let button = statusItem.button else { return }
+        if popover.isShown {
+            closePopover()
+            return
+        }
+        store.refresh()
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        popover.contentViewController?.view.window?.makeKey()
+        NSApp.activate(ignoringOtherApps: true)
+
+        // Clicking anywhere else closes it, like a normal menu-bar extra.
+        eventMonitor = NSEvent.addGlobalMonitorForEvents(
+            matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+                self?.closePopover()
+            }
+    }
+
+    private func closePopover() {
+        popover.performClose(nil)
+        if let eventMonitor {
+            NSEvent.removeMonitor(eventMonitor)
+            self.eventMonitor = nil
+        }
+    }
+}
+
+// Top-level entry point: `main.swift` style code so the package can build a plain
+// executable without an app bundle wrapper.
+let app = NSApplication.shared
+
+// `Shots --preview <path>` renders the popover to a PNG and exits. Used to check
+// layout changes without clicking through the UI by hand.
+if let flag = CommandLine.arguments.firstIndex(of: "--preview") {
+    app.setActivationPolicy(.prohibited)
+    let store = ShotsStore()
+    let controller = PopoverViewController(store: store)
+    controller.loadView()
+    controller.viewDidLoad()
+
+    // Wait for the scan to land before rendering, otherwise the preview is empty.
+    var waited = 0.0
+    while store.isScanning, waited < 60 {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        waited += 0.1
+    }
+    RunLoop.current.run(until: Date().addingTimeInterval(0.5))
+
+    let view = controller.view
+    view.frame = NSRect(x: 0, y: 0, width: 470, height: 500)
+    guard let rep = view.bitmapImageRepForCachingDisplay(in: view.bounds) else {
+        FileHandle.standardError.write(Data("cannot render view\n".utf8))
+        exit(1)
+    }
+    view.cacheDisplay(in: view.bounds, to: rep)
+    guard let data = rep.representation(using: .png, properties: [:]) else {
+        FileHandle.standardError.write(Data("cannot encode png\n".utf8))
+        exit(1)
+    }
+    let index = flag + 1
+    let output = index < CommandLine.arguments.count
+        ? CommandLine.arguments[index]
+        : "/tmp/shots-preview.png"
+    do {
+        try data.write(to: URL(fileURLWithPath: output))
+        print("wrote \(output) (\(store.plan.items.count) item(s))")
+        exit(0)
+    } catch {
+        FileHandle.standardError.write(Data("cannot write \(output)\n".utf8))
+        exit(1)
+    }
+}
+
+// `Shots --once` scans, files everything, and exits. Handy for launchd jobs and for
+// checking the app path without touching the UI.
+if CommandLine.arguments.contains("--once") {
+    app.setActivationPolicy(.prohibited)
+    let store = ShotsStore()
+    store.refresh()
+    var waited = 0.0
+    while store.isScanning, waited < 120 {
+        RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+        waited += 0.1
+    }
+    let found = store.plan.items.count
+    if found > 0 {
+        store.apply()
+        // `apply` refreshes asynchronously; let that settle so the message is real.
+        var waited = 0.0
+        while store.isScanning, waited < 120 {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            waited += 0.1
+        }
+    }
+    print(store.statusLine)
+    exit(0)
+}
+
+let delegate = AppDelegate()
+app.delegate = delegate
+app.run()

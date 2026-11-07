@@ -1,8 +1,7 @@
-import CryptoKit
 import Foundation
 import ShotsCore
 
-// MARK: - Small terminal helpers
+// MARK: - Terminal helpers
 
 let isTTY = isatty(STDOUT_FILENO) == 1
 func dim(_ s: String) -> String { isTTY ? "\u{001B}[2m\(s)\u{001B}[0m" : s }
@@ -16,84 +15,11 @@ func fail(_ message: String) -> Never {
     exit(1)
 }
 
-let imageExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "tif", "tiff", "webp", "gif", "bmp", "pdf"]
-
-/// macOS names screenshots "Screenshot 2026-11-06 at 13.45.38.png" (or Thai-era 2569).
-/// We only touch files that look like captures unless `--all` is passed, so a photo
-/// dropped on the Desktop is never moved by accident.
-func looksLikeScreenshot(_ url: URL) -> Bool {
-    let name = url.lastPathComponent.lowercased()
-    let prefixes = ["screenshot", "screen shot", "screencapture", "cleanshot", "snipaste", "capture"]
-    return prefixes.contains { name.hasPrefix($0) }
+func note(_ message: String) {
+    FileHandle.standardError.write(Data((message + "\n").utf8))
 }
 
-// MARK: - Journal
-
-struct Move: Codable {
-    let from: String
-    let to: String
-}
-
-struct JournalEntry: Codable {
-    let date: Date
-    let destination: String
-    let moves: [Move]
-}
-
-enum Journal {
-    static var directory: URL {
-        FileManager.default.homeDirectoryForCurrentUser.appendingPathComponent(".local/share/shots")
-    }
-
-    static func write(_ entry: JournalEntry) throws {
-        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
-        let stamp = ISO8601DateFormatter().string(from: Date()).replacingOccurrences(of: ":", with: "-")
-        let url = directory.appendingPathComponent("journal-\(stamp).json")
-        let encoder = JSONEncoder()
-        encoder.outputFormatting = [.prettyPrinted]
-        encoder.dateEncodingStrategy = .iso8601
-        try encoder.encode(entry).write(to: url)
-    }
-
-    /// Newest journal first.
-    static func entries() -> [(URL, JournalEntry)] {
-        let files = (try? FileManager.default.contentsOfDirectory(
-            at: directory, includingPropertiesForKeys: [.contentModificationDateKey])) ?? []
-        let decoder = JSONDecoder()
-        decoder.dateDecodingStrategy = .iso8601
-        return files
-            .filter { $0.lastPathComponent.hasPrefix("journal-") && $0.pathExtension == "json" }
-            .compactMap { url in
-                guard let data = try? Data(contentsOf: url),
-                      let entry = try? decoder.decode(JournalEntry.self, from: data)
-                else { return nil }
-                return (url, entry)
-            }
-            .sorted { $0.1.date > $1.1.date }
-    }
-}
-
-// MARK: - Plan
-
-/// SHA-256 of the file bytes, used to spot shots you captured twice.
-func contentHash(_ url: URL) -> String? {
-    guard let handle = try? FileHandle(forReadingFrom: url) else { return nil }
-    defer { try? handle.close() }
-    var hasher = SHA256()
-    while let chunk = try? handle.read(upToCount: 1 << 20), !chunk.isEmpty {
-        hasher.update(data: chunk)
-    }
-    return hasher.finalize().map { String(format: "%02x", $0) }.joined()
-}
-
-struct Action {
-    let source: URL
-    let destination: URL
-    let facts: ImageFacts
-    let name: Namer.Name
-    /// Capture time, taken from the filename when available.
-    let date: Date
-}
+// MARK: - Options
 
 struct Options {
     var sources: [URL] = []
@@ -110,16 +36,15 @@ func parse(_ arguments: [String]) -> (command: String, options: Options) {
     var options = Options()
     var positional: [String] = []
     var index = 0
-    let args = arguments
 
     func value() -> String {
         index += 1
-        guard index < args.count else { fail("missing value for \(args[index - 1])") }
-        return args[index]
+        guard index < arguments.count else { fail("missing value for \(arguments[index - 1])") }
+        return arguments[index]
     }
 
-    while index < args.count {
-        let arg = args[index]
+    while index < arguments.count {
+        let arg = arguments[index]
         switch arg {
         case "--dir", "-d":
             options.sources.append(URL(fileURLWithPath: (value() as NSString).expandingTildeInPath))
@@ -153,185 +78,11 @@ func parse(_ arguments: [String]) -> (command: String, options: Options) {
     return (positional.first ?? "help", options)
 }
 
-func collect(_ options: Options, config: Config) -> [URL] {
-    let dirs = options.sources.isEmpty
-        ? config.sources.map { URL(fileURLWithPath: $0) }
-        : options.sources
-    let destination = options.destination ?? URL(fileURLWithPath: config.destination)
-
-    var found: [URL] = []
-    for dir in dirs {
-        guard FileManager.default.fileExists(atPath: dir.path) else {
-            FileHandle.standardError.write(
-                Data(yellow("no such folder: \(dir.path)\n").utf8))
-            continue
-        }
-        guard let contents = try? FileManager.default.contentsOfDirectory(
-            at: dir,
-            includingPropertiesForKeys: [.isRegularFileKey, .fileSizeKey],
-            options: [.skipsHiddenFiles, .skipsSubdirectoryDescendants])
-        else { continue }
-
-        for url in contents where url.pathExtension.lowercased() != "" {
-            guard imageExtensions.contains(url.pathExtension.lowercased()) else { continue }
-            guard (try? url.resourceValues(forKeys: [.isRegularFileKey]).isRegularFile) == true else { continue }
-            guard !url.path.hasPrefix(destination.path + "/") else { continue }
-            guard options.all || looksLikeScreenshot(url) else { continue }
-            found.append(url)
-        }
-    }
-    return found.sorted { $0.lastPathComponent < $1.lastPathComponent }
-}
-
-/// The capture time macOS bakes into the filename ("Screenshot 2026-11-06 at 13.45.38.png").
-/// More trustworthy than the filesystem date, which is lost when a file is copied,
-/// and it survives the Thai Buddhist-era year (2569 -> 2026).
-func timestampInName(_ url: URL) -> Date? {
-    let pattern = #"(\d{4})-(\d{2})-(\d{2})[ _]at[ _](\d{2})[.:](\d{2})[.:](\d{2})"#
-    guard let regex = try? NSRegularExpression(pattern: pattern),
-          let match = regex.firstMatch(
-            in: url.lastPathComponent,
-            options: [],
-            range: NSRange(url.lastPathComponent.startIndex..., in: url.lastPathComponent))
-    else { return nil }
-
-    func group(_ index: Int) -> Int? {
-        guard let range = Range(match.range(at: index), in: url.lastPathComponent) else { return nil }
-        return Int(url.lastPathComponent[range])
-    }
-    guard let year = group(1), let month = group(2), let day = group(3),
-          let hour = group(4), let minute = group(5), let second = group(6)
-    else { return nil }
-
-    var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = .current
-    // macOS writes the year in the system calendar, so a Thai user gets 2569.
-    let gregorianYear = year > 2400 ? year - 543 : year
-    return calendar.date(from: DateComponents(
-        year: gregorianYear, month: month, day: day,
-        hour: hour, minute: minute, second: second))
-}
-
-func destinationURL(for facts: ImageFacts, name: Namer.Name, root: URL, layout: String, date: Date) -> URL {
-    // Force the Gregorian calendar: with a Thai locale the default is Buddhist.
-    var calendar = Calendar(identifier: .gregorian)
-    calendar.timeZone = .current
-    let parts = calendar.dateComponents([.year, .month, .day, .hour, .minute], from: date)
-    let day = String(format: "%04d-%02d-%02d", parts.year ?? 1970, parts.month ?? 1, parts.day ?? 1)
-    let time = String(format: "%02d%02d", parts.hour ?? 0, parts.minute ?? 0)
-    let filename = "\(day)-\(time)-\(name.stem).\(facts.url.pathExtension.lowercased())"
-
-    let base: URL
-    switch layout {
-    case "topic": base = root.appendingPathComponent(name.folder)
-    case "both": base = root.appendingPathComponent(name.folder).appendingPathComponent(day)
-    default: base = root.appendingPathComponent(day)
-    }
-    return base.appendingPathComponent(filename)
-}
-
-/// Never overwrite: bump to `name-2.ext`, `name-3.ext`, ...
-/// Never overwrite: bump to `name-2.ext`, `name-3.ext`, ... Also treats paths
-/// already claimed earlier in this run as taken, since two screenshots can
-/// legitimately want the same name before either exists on disk.
-func unique(_ url: URL, reserved: Set<String> = []) -> URL {
-    let manager = FileManager.default
-    let taken = { (candidate: URL) in
-        manager.fileExists(atPath: candidate.path) || reserved.contains(candidate.path)
-    }
-    guard taken(url) else { return url }
-    let base = url.deletingPathExtension()
-    let ext = url.pathExtension
-    var counter = 2
-    while true {
-        let candidate = base.deletingLastPathComponent()
-            .appendingPathComponent("\(base.lastPathComponent)-\(counter).\(ext)")
-        if !taken(candidate) { return candidate }
-        counter += 1
+extension Options {
+    var sourceURLs: [URL] {
+        sources.isEmpty ? [] : sources
     }
 }
-
-struct Plan {
-    var actions: [Action] = []
-    var duplicates: [URL] = []
-    var skipped: Int = 0
-}
-
-func buildPlan(files: [URL], options: Options, config: Config) -> Plan {
-    guard !files.isEmpty else { return Plan() }
-    let destination = options.destination ?? URL(fileURLWithPath: config.destination)
-    let layout = options.layout ?? config.layout
-
-    if !options.quiet {
-        FileHandle.standardError.write(Data(dim("analyzing \(files.count) image(s) with on-device Vision...\n").utf8))
-    }
-
-    let analyzed = analyzeAll(files, languages: config.languages) { done, total in
-        guard !options.quiet, isTTY else { return }
-        FileHandle.standardError.write(Data("\u{001B}[2m\r  \(done)/\(total)\u{001B}[0m".utf8))
-    }
-    if !options.quiet, isTTY {
-        FileHandle.standardError.write(Data("\r\u{001B}[K".utf8))
-    }
-
-    var plan = Plan()
-    var reserved = Set<String>()
-    var seenHashes: [String: URL] = [:]
-
-    for (url, result) in analyzed {
-        switch result {
-        case .failure(let error):
-            plan.skipped += 1
-            FileHandle.standardError.write(Data(yellow("skipped \(url.lastPathComponent): \(error)\n").utf8))
-        case .success(let facts):
-            if let hash = contentHash(url) {
-                if let original = seenHashes[hash] {
-                    plan.duplicates.append(url)
-                    if !options.quiet {
-                        FileHandle.standardError.write(Data(
-                            dim("duplicate \(url.lastPathComponent) (same as \(original.lastPathComponent))\n").utf8))
-                    }
-                    continue
-                }
-                seenHashes[hash] = url
-            }
-
-            let isCapture = looksLikeScreenshot(url)
-            // Prefer a different title over "-2" when two shots collide.
-            let date = timestampInName(url) ?? facts.creationDate
-            guard var name = Namer.name(for: facts, extra: config.extraRules, isCapture: isCapture)
-            else {
-                plan.skipped += 1
-                continue
-            }
-            var target = destinationURL(
-                for: facts, name: name, root: destination, layout: layout, date: date)
-
-            // Prefer a different title over "-2" when two shots collide.
-            var attempt = 1
-            while reserved.contains(target.path)
-                || FileManager.default.fileExists(atPath: target.path) {
-                guard attempt < 6,
-                      let candidate = Namer.name(
-                        for: facts, extra: config.extraRules, isCapture: isCapture, attempt: attempt)
-                else { break }
-                name = candidate
-                target = destinationURL(
-                    for: facts, name: name, root: destination, layout: layout, date: date)
-                attempt += 1
-            }
-            if reserved.contains(target.path) || FileManager.default.fileExists(atPath: target.path) {
-                target = unique(target, reserved: reserved)
-            }
-            reserved.insert(target.path)
-            plan.actions.append(
-                Action(source: url, destination: target, facts: facts, name: name, date: date))
-        }
-    }
-    return plan
-}
-
-// MARK: - Commands
 
 let usage = """
 \(bold("shots")) — describe and file your macOS screenshots with on-device Vision AI.
@@ -367,117 +118,113 @@ let usage = """
   ~/.local/share/shots/journal-*.json  undo journals, one per batch
 """
 
-func runPlan(_ options: Options, config: Config, apply: Bool) {
-    let files = collect(options, config: config)
-    guard !files.isEmpty else {
-        print(dim("nothing to do — no new screenshots found"))
-        return
+// MARK: - plan / apply
+
+func buildPlan(_ options: Options, config: Config) -> Shots.Plan {
+    let destination = options.destination ?? URL(fileURLWithPath: config.destination)
+    let scan = Shots.scan(
+        sources: options.sources.isEmpty ? config.sources.map { URL(fileURLWithPath: $0) } : options.sources,
+        destination: destination,
+        includeAll: options.all)
+
+    if !options.quiet {
+        for dir in scan.missing { note(yellow("no such folder: \(dir.path)")) }
+        note(dim("analyzing \(scan.files.count) image(s) with on-device Vision..."))
     }
-    let plan = buildPlan(files: files, options: options, config: config)
-    guard !plan.actions.isEmpty else {
-        print(dim("nothing to do"))
+
+    let plan = Shots.plan(
+        files: scan.files,
+        destination: destination,
+        layout: options.layout ?? config.layout,
+        rules: config.extraRules,
+        languages: config.languages
+    ) { done, total in
+        guard !options.quiet, isTTY else { return }
+        note("\u{001B}[2m\r  \(done)/\(total)\u{001B}[0m")
+    }
+    if !options.quiet, isTTY { note("\r\u{001B}[K") }
+    return plan
+}
+
+func runPlan(_ options: Options, config: Config, apply shouldApply: Bool) {
+    let destinationRoot = (options.destination ?? URL(fileURLWithPath: config.destination)).path
+    let plan = buildPlan(options, config: config)
+
+    guard !plan.isEmpty else {
+        for url in plan.skipped { note(yellow("skipped \(url.lastPathComponent)")) }
+        print(dim("nothing to do — no new screenshots found"))
         return
     }
 
     if options.json {
-        let payload = plan.actions.map { action -> [String: String] in
+        let payload = plan.items.map { item -> [String: String] in
             [
-                "source": action.source.path,
-                "destination": action.destination.path,
-                "folder": action.name.folder,
-                "created": ISO8601DateFormatter().string(from: action.date),
+                "source": item.source.path,
+                "destination": item.destination.path,
+                "folder": item.folder,
+                "created": ISO8601DateFormatter().string(from: item.date),
             ]
         }
-        let data = try? JSONSerialization.data(
-            withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
+        let data = try? JSONSerialization.data(withJSONObject: payload, options: [.prettyPrinted, .sortedKeys])
         print(String(data: data ?? Data(), encoding: .utf8) ?? "[]")
-        if !apply { return }
+        if !shouldApply { return }
     } else {
-        let root = (options.destination ?? URL(fileURLWithPath: config.destination)).path
-            .replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")
-        var groups: [String: [Action]] = [:]
-        for action in plan.actions {
-            let key = action.destination.deletingLastPathComponent().path
-                .replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")
-            groups[key, default: []].append(action)
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        var groups: [String: [Shots.PlanItem]] = [:]
+        for item in plan.items {
+            let key = item.destination.deletingLastPathComponent().path
+                .replacingOccurrences(of: home, with: "~")
+            groups[key, default: []].append(item)
         }
         print("")
         for key in groups.keys.sorted() {
             print(bold(key + "/"))
-            for action in groups[key]!.sorted(by: { $0.destination.path < $1.destination.path }) {
-                print("  \(action.destination.lastPathComponent)")
-                print(dim("    ← \(action.source.lastPathComponent)  [\(action.name.folder)]"))
+            for item in groups[key]!.sorted(by: { $0.destination.path < $1.destination.path }) {
+                print("  \(item.newName)")
+                print(dim("    ← \(item.originalName)  [\(item.folder)]"))
             }
         }
         print("")
-        print(dim("\(plan.actions.count) file(s) → \(root)"))
+        print(dim("\(plan.items.count) file(s) → \(destinationRoot.replacingOccurrences(of: home, with: "~"))"))
         if !plan.duplicates.isEmpty {
             print(dim("  \(plan.duplicates.count) duplicate(s) left in place"))
         }
     }
 
-    guard apply else {
+    guard shouldApply else {
         print(dim("dry run only — run `shots apply --yes` to move them"))
         return
     }
 
-    if !options.yes {
+    guard options.yes else {
         print("")
-        print("This will move \(plan.actions.count) file(s). Re-run with \(bold("--yes")) to confirm.")
+        print("This will move \(plan.items.count) file(s). Re-run with \(bold("--yes")) to confirm.")
         return
     }
 
-    var moves: [Move] = []
-    var failures = 0
-    for action in plan.actions {
-        do {
-            try FileManager.default.createDirectory(
-                at: action.destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-            let final = unique(action.destination)
-            try FileManager.default.moveItem(at: action.source, to: final)
-            moves.append(Move(from: action.source.path, to: final.path))
-        } catch {
-            failures += 1
-            FileHandle.standardError.write(Data(red("failed \(action.source.lastPathComponent): \(error.localizedDescription)\n").utf8))
-        }
+    do {
+        let moves = try Shots.apply(plan.items, destinationRoot: destinationRoot)
+        print(green("moved \(moves.count) file(s)"))
+        print(dim("undo with `shots undo`"))
+    } catch {
+        fail("move failed: \(error.localizedDescription)")
     }
-
-    if !moves.isEmpty {
-        let entry = JournalEntry(
-            date: Date(),
-            destination: (options.destination ?? URL(fileURLWithPath: config.destination)).path,
-            moves: moves)
-        try? Journal.write(entry)
-    }
-
-    print(green("moved \(moves.count) file(s)") + (failures > 0 ? red(", \(failures) failed") : ""))
-    if !moves.isEmpty { print(dim("undo with `shots undo`")) }
 }
 
+// MARK: - undo / list
+
 func runUndo() {
-    guard let (url, entry) = Journal.entries().first else {
+    guard let result = Journal.undoLast() else {
         print(dim("no batches to undo"))
         return
     }
-    var restored = 0
-    var skipped = 0
-    for move in entry.moves {
-        let from = URL(fileURLWithPath: move.to)
-        let to = URL(fileURLWithPath: move.from)
-        guard FileManager.default.fileExists(atPath: from.path) else { skipped += 1; continue }
-        let target = unique(to)
-        do {
-            try FileManager.default.createDirectory(
-                at: target.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try FileManager.default.moveItem(at: from, to: target)
-            restored += 1
-        } catch {
-            skipped += 1
-        }
-    }
-    try? FileManager.default.removeItem(at: url)
-    print(green("restored \(restored) file(s)") + (skipped > 0 ? dim(", \(skipped) skipped") : ""))
-    print(dim("batch from \(ISO8601DateFormatter().string(from: entry.date))"))
+    let formatter = DateFormatter()
+    formatter.locale = Locale(identifier: "en_US_POSIX")
+    formatter.calendar = Calendar(identifier: .gregorian)
+    formatter.dateFormat = "yyyy-MM-dd HH:mm"
+    print(green("restored \(result.restored) file(s)")
+        + (result.skipped > 0 ? dim(", \(result.skipped) skipped") : ""))
+    print(dim("batch from \(formatter.string(from: result.date))"))
 }
 
 func runList() {
@@ -490,48 +237,49 @@ func runList() {
     formatter.locale = Locale(identifier: "en_US_POSIX")
     formatter.calendar = Calendar(identifier: .gregorian)
     formatter.dateFormat = "yyyy-MM-dd HH:mm"
+    let home = FileManager.default.homeDirectoryForCurrentUser.path
     for (_, entry) in entries {
-        let folder = entry.destination
-            .replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")
+        let folder = entry.destination.replacingOccurrences(of: home, with: "~")
         print("\(bold(formatter.string(from: entry.date)))  \(entry.moves.count) file(s)  → \(folder)")
     }
 }
 
+// MARK: - watch
+
 func runWatch(_ options: Options, config: Config, interval: TimeInterval) {
     let root = (options.destination ?? URL(fileURLWithPath: config.destination)).path
-    print(bold("watching ") + config.sources.joined(separator: ", ") + dim(" → \(root), every \(Int(interval))s"))
+    let sources = options.sources.isEmpty ? config.sources : options.sources.map(\.path)
+    print(bold("watching ") + sources.joined(separator: ", ")
+        + dim(" → \(root.replacingOccurrences(of: FileManager.default.homeDirectoryForCurrentUser.path, with: "~")), every \(Int(interval))s"))
     print(dim("ctrl-c to stop"))
+
     while true {
-        var local = options
-        local.quiet = true
-        let files = collect(local, config: config).filter { url in
-            // Give the screenshot tool a moment to finish writing the file.
+        let destination = options.destination ?? URL(fileURLWithPath: config.destination)
+        let scan = Shots.scan(
+            sources: options.sources.isEmpty ? config.sources.map { URL(fileURLWithPath: $0) } : options.sources,
+            destination: destination,
+            includeAll: options.all)
+
+        // Wait a few seconds so the screenshot tool can finish writing the file.
+        let ready = scan.files.filter { url in
             guard let modified = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
             else { return false }
             return Date().timeIntervalSince(modified) > 5
         }
-        if !files.isEmpty {
-            let plan = buildPlan(files: files, options: local, config: config)
-            var moves: [Move] = []
-            for action in plan.actions {
-                do {
-                    try FileManager.default.createDirectory(
-                        at: action.destination.deletingLastPathComponent(), withIntermediateDirectories: true)
-                    let final = unique(action.destination)
-                    try FileManager.default.moveItem(at: action.source, to: final)
-                    moves.append(Move(from: action.source.path, to: final.path))
-                    print("\(green("filed")) \(final.lastPathComponent)")
-                } catch {
-                    print(red("failed") + " \(action.source.lastPathComponent): \(error.localizedDescription)")
-                }
-            }
-            if !moves.isEmpty {
-                try? Journal.write(JournalEntry(date: Date(), destination: root, moves: moves))
+
+        if !ready.isEmpty {
+            let plan = Shots.plan(
+                files: ready, destination: destination, layout: options.layout ?? config.layout,
+                rules: config.extraRules, languages: config.languages)
+            if let moves = try? Shots.apply(plan.items, destinationRoot: root) {
+                for move in moves { print("\(green("filed")) \(URL(fileURLWithPath: move.to).lastPathComponent)") }
             }
         }
         Thread.sleep(forTimeInterval: interval)
     }
 }
+
+// MARK: - config
 
 func runConfig(_ arguments: [String], config: Config) {
     var config = config
@@ -554,8 +302,7 @@ func runConfig(_ arguments: [String], config: Config) {
     while index < arguments.count {
         switch arguments[index] {
         case "--print":
-            // Applied after any changes on the same command line.
-            break
+            break   // applied after any changes on the same command line
         case "--layout":
             index += 1
             guard index < arguments.count, ["day", "topic", "both"].contains(arguments[index]) else {
@@ -594,6 +341,7 @@ func runConfig(_ arguments: [String], config: Config) {
         }
         index += 1
     }
+
     do {
         try config.save()
         if arguments.contains("--print") {
@@ -606,7 +354,7 @@ func runConfig(_ arguments: [String], config: Config) {
     }
 }
 
-// MARK: - Background agent
+// MARK: - launchd agent
 
 let agentLabel = "com.teveus.shots"
 let agentPlist = FileManager.default.homeDirectoryForCurrentUser
@@ -700,6 +448,28 @@ func runAgent(_ arguments: [String]) {
     }
 }
 
+// MARK: - debug
+
+func runDebug(_ arguments: [String], config: Config) {
+    guard let path = arguments.first else { fail("debug needs an image path") }
+    let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
+    guard let facts = try? analyze(url, languages: config.languages) else {
+        fail("cannot decode \(url.path)")
+    }
+    print("size: \(facts.width)x\(facts.height)  screenshot=\(facts.isScreenshot)")
+    print("classes: " + facts.classes.prefix(5)
+        .map { "\($0.label) \(String(format: "%.2f", $0.confidence))" }
+        .joined(separator: ", "))
+    print("lines:")
+    for (i, line) in facts.lines.enumerated() { print("  \(i): \(line)") }
+    if let name = Namer.name(
+        for: facts, extra: config.extraRules, isCapture: Shots.looksLikeScreenshot(url)) {
+        print("=> \(name.folder)/\(name.stem)")
+    } else {
+        print("=> (no distinct name; would be filed as a duplicate)")
+    }
+}
+
 // MARK: - Entry point
 
 let arguments = Array(CommandLine.arguments.dropFirst())
@@ -707,15 +477,15 @@ var config = Config.load()
 
 // `config` and `agent` take their own subcommand flags (--add-source, install),
 // so they are dispatched before the global option parser sees them.
-let firstWord = arguments.first
-if firstWord == "config" || firstWord == "agent" {
-    let rest = Array(arguments.dropFirst())
-    if firstWord == "config" {
-        runConfig(rest, config: config)
-    } else {
-        runAgent(rest)
-    }
+switch arguments.first {
+case "config":
+    runConfig(Array(arguments.dropFirst()), config: config)
     exit(0)
+case "agent":
+    runAgent(Array(arguments.dropFirst()))
+    exit(0)
+default:
+    break
 }
 
 let (command, options) = parse(arguments)
@@ -731,24 +501,10 @@ case "list", "batches":
     runList()
 case "watch", "daemon":
     runWatch(options, config: config, interval: options.interval)
+case "debug":
+    runDebug(Array(arguments.dropFirst()), config: config)
 case "version":
     print("shots 1.0.0")
-case "debug":
-    let path = arguments.dropFirst().first { !$0.hasPrefix("-") } ?? ""
-    let url = URL(fileURLWithPath: (path as NSString).expandingTildeInPath)
-    guard let facts = try? analyze(url, languages: config.languages) else {
-        fail("cannot decode \(url.path)")
-    }
-    print("size: \(facts.width)x\(facts.height)  screenshot=\(facts.isScreenshot)")
-    print("classes: " + facts.classes.prefix(5).map { "\($0.label) \(String(format: "%.2f", $0.confidence))" }.joined(separator: ", "))
-    print("lines:")
-    for (i, line) in facts.lines.enumerated() { print("  \(i): \(line)") }
-    let isCapture = looksLikeScreenshot(url)
-    if let name = Namer.name(for: facts, extra: config.extraRules, isCapture: isCapture) {
-        print("=> \(name.folder)/\(name.stem)")
-    } else {
-        print("=> (no distinct name; would be filed as a duplicate)")
-    }
 default:
     print(usage)
 }

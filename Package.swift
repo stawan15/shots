@@ -7,6 +7,7 @@ let package = Package(
     products: [
         .executable(name: "shots", targets: ["shots"]),
         .executable(name: "shots-selftest", targets: ["shots-selftest"]),
+        .executable(name: "ShotsApp", targets: ["ShotsApp"]),
     ],
     targets: [
         .target(
@@ -27,6 +28,13 @@ let package = Package(
             dependencies: ["ShotsCore"],
             path: "Sources/shots-selftest",
             swiftSettings: [.swiftLanguageMode(.v5)]
+        ),
+        .executableTarget(
+            name: "ShotsApp",
+            dependencies: ["ShotsCore"],
+            path: "Sources/ShotsApp",
+            swiftSettings: [.swiftLanguageMode(.v5)],
+            linkerSettings: [.linkedFramework("AppKit")]
         ),
     ]
 )

@@ -13,9 +13,15 @@ public struct Config: Codable {
     public var rules: [RuleConfig]
 
     public struct RuleConfig: Codable {
-        var folder: String
-        var tag: String
-        var keywords: [String]
+        public var folder: String
+        public var tag: String
+        public var keywords: [String]
+
+        public init(folder: String, tag: String, keywords: [String]) {
+            self.folder = folder
+            self.tag = tag
+            self.keywords = keywords
+        }
     }
 
     public static var defaultPath: URL {

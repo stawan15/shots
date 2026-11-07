@@ -1,145 +1,109 @@
 # shots
 
-Files your macOS screenshots by *what is in them*, not by timestamp. Everything
-runs on-device with Apple's Vision framework: no API keys, no uploads, nothing
-leaves the machine.
+**Your screenshots, named and filed by what's actually in them.**
+
+A macOS menu-bar app and CLI that reads each screenshot with on-device Vision OCR,
+works out what it shows, gives it a descriptive filename, and files it into folders
+by topic or by day. No filename archaeology, no manual renaming, no cloud.
+
+<img src="docs/preview.png" width="360" alt="The Shots menu-bar popover showing two screenshots with thumbnails, new filenames, and topic badges">
 
 ```
-~/Screenshots/
-  2026-11-04/
-    2026-11-04-1341-grafana-team-kubernetes-node-exporter.png
-    2026-11-04-1543-zabbix-current-value.png
-  2026-11-05/
-    2026-11-05-1153-error-net-err-cert-authority-invalid.png
-  2026-11-06/
-    2026-11-06-1307-terminal-docker-ps-web-01.png
-    2026-11-06-1345-teams-meeting-devops-team-chat.png
+before                                    after
+Screenshot 2569-11-06 at 13.45.38.png  →  2026-11-06-1345-teams-meeting-devops-team-chat.png
+Screenshot 2569-11-04 at 15.43.44.png  →  2026-11-04-1543-zabbix-current-value.png
+Screenshot 2569-11-06 at 13.07.55.png  →  2026-11-06-1307-terminal-docker-ps-web-01.png
+Screenshot 2569-11-05 at 14.12.01.png  →  2026-11-05-1412-grafana-team-kubernetes-node-exporter.png
 ```
+
+Filed into `~/Screenshots/2026-11-06/`, or by topic, or both — your choice.
+
+## Why
+
+Screenshot folders rot. macOS calls everything `Screenshot 2026-11-06 at 13.45.38.png`,
+so the only way to find the one Grafana panel you need is to open forty images. The
+usual fix is a cloud AI service: an API key, an upload of your work screens, and a bill.
+
+This does it locally. Apple's Vision framework already ships on every Mac with strong
+OCR and image classification. Put a thin, opinionated layer on top — topic rules,
+readable-title selection, safe file moves — and the folder organises itself.
+
+Nothing leaves the machine. No network calls. No model download. It works on a plane.
 
 ## Install
 
+Requires macOS 14+ and Swift 6 (CommandLineTools is enough — no Xcode needed).
+
 ```sh
-./install.sh          # builds and copies to ~/.local/bin/shots
+git clone https://github.com/stawan15/shots.git
+cd shots
+./install.sh          # builds the CLI → ~/.local/bin/shots
+./build-app.sh        # builds the menu-bar app → dist/Shots.app
 ```
 
-## Use
+## Use it
+
+### Menu bar
 
 ```sh
-shots plan            # dry run: prints the full rename/move table, moves nothing
+open dist/Shots.app
+```
+
+The icon shows how many screenshots are waiting. Click it for thumbnails, the new
+name for each shot, and the topic it was assigned. Uncheck anything you want to
+leave alone, then **File All**. Settings covers watched folders, destination,
+layout, and custom rules. Flip **File new screenshots automatically** and it keeps
+up on its own.
+
+### Command line
+
+```sh
+shots plan            # see every rename and move; touches nothing
 shots apply --yes     # do it
-shots undo            # put the last batch back exactly where it was
-shots list            # previous batches
+shots undo            # put the last batch back, exactly as it was
 ```
 
-Watch mode files new screenshots as they appear (every 30s by default):
+Keep it running in the background:
 
 ```sh
-shots watch --interval 20
+shots watch --interval 20      # foreground loop
+shots agent install            # or a launchd job that runs at login
 ```
-
-Or run that automatically at login:
-
-```sh
-shots agent install    # launchd job, checks once a minute
-shots agent status
-shots agent log        # what it has filed lately
-shots agent uninstall
-```
-
-## Full command reference
-
-| Command | What it does |
-| --- | --- |
-| `shots plan` | Dry run. Prints every source → destination, groups by folder. Accepts all the flags below. |
-| `shots apply --yes` | Performs the plan and writes an undo journal. Without `--yes` it only prints what it would move. |
-| `shots undo` | Reverts the most recent batch, restoring original filenames and locations, then deletes that journal entry. Run it repeatedly to walk back further. |
-| `shots list` | Lists past batches, newest first. |
-| `shots watch` | Long-running loop that files new screenshots. `--interval N` seconds between checks (min 5, default 30). Files are left alone for 5s after capture so the screenshot tool can finish writing. |
-| `shots agent install` | Installs a launchd job (`~/Library/LaunchAgents/com.teveus.shots.plist`) that runs `watch --interval 60` at login. |
-| `shots agent status` | Shows whether the job is installed and its launchd state. |
-| `shots agent log` | Tails the last 40 lines of the agent's log. |
-| `shots agent uninstall` | Boots the job out and deletes the plist. |
-| `shots config` | Prints the current config. |
-| `shots config --edit` | Opens `~/.config/shots/config.json` in `$EDITOR`. |
-| `shots config --layout day\|topic\|both` | Sets the default layout. |
-| `shots config --add-source DIR` | Adds a folder to scan (`--remove-source DIR` to drop it). |
-| `shots config --destination DIR` | Changes the destination root. |
-| `shots config --print` | Prints the config after applying any other config flags given on the same line. |
-| `shots debug PATH` | Dumps OCR lines, Vision labels, and the resulting name for one file. Use this when a name looks wrong. |
-| `shots version` | Prints the version. |
-
-### Flags (for `plan`, `apply`, `watch`)
-
-| Flag | Meaning |
-| --- | --- |
-| `-d`, `--dir DIR` | Folder to scan. Repeatable. Defaults to `sources` in the config. |
-| `--to DIR` | Destination root for this run only (does not change the config). |
-| `--layout MODE` | `day`, `topic` or `both` for this run only. |
-| `--all` | Also move images that do not look like screenshots (photos, exported diagrams). |
-| `-y`, `--yes` | Required for `apply` to actually move files. |
-| `--json` | Emit the plan as JSON (source, destination, folder, created). Useful for scripting; `apply --json` still applies. |
-| `-q`, `--quiet` | No progress output. |
-
-### Common recipes
-
-```sh
-# see what would happen, then do it
-shots plan && shots apply --yes
-
-# organise a different folder once, into a scratch tree
-shots plan  --dir ~/Pictures/inbox --to ~/Screenshots/inbox
-shots apply --dir ~/Pictures/inbox --to ~/Screenshots/inbox --yes
-
-# keep it automatic
-shots agent install
-
-# something got named badly — find out why
-shots debug ~/Screenshots/2026-11-06/*docker*.png
-
-# a new project you want recognised
-shots config --edit      # add {"folder":"work/client-a","tag":"clienta","keywords":["acme portal"]}
-```
-
-### Where things live
-
-| Path | Contents |
-| --- | --- |
-| `~/.local/bin/shots` | The binary (installed by `install.sh`). |
-| `~/.config/shots/config.json` | Sources, destination, layout, language list, your custom rules. |
-| `~/.local/share/shots/journal-*.json` | One file per applied batch. `shots undo` consumes these. |
-| `~/Library/LaunchAgents/com.teveus.shots.plist` | The background job, if installed. |
-| `~/.local/share/shots/agent.log` | Output from the background job. |
 
 ## How it decides
 
-1. **OCR** every image with Vision (`accurate`, English + Thai).
-2. **Score topic rules** against the extracted text — `grafana`, `keycloak`,
-   `jmeter`, `github actions`, `dbeaver`, `zabbix`, shell prompts, and so on.
-   The highest score wins, so a JMeter page that contains a Keycloak URL is still
-   filed under `testing`. A single weak generic keyword is not enough; those
-   screenshots land in `misc` rather than being mislabelled.
-3. **Pick a title** — for shell screenshots the command at the prompt
-   (`docker ps web-01`), otherwise the most readable line near the top of the
-   image. Identifier soup, base64 and OCR-mangled Thai are scored down.
-4. **Slugify** into ASCII, stripping UI chrome words (`search`, `dashboard`,
-   `settings`), capping the name at 70 characters.
+1. **OCR** the image with Vision (accurate mode, English + Thai by default).
+2. **Score topic rules** against the text. Each topic has weighted keywords, so
+   `grafana` scores high while `datasource` adds a little. The best score wins —
+   a JMeter page containing a Keycloak login URL is still filed under `testing`,
+   not `auth`. Generic single keywords aren't enough; unclear shots go to `misc`
+   rather than being mislabelled.
+3. **Pick a title.** For terminal screenshots that's the command at the prompt
+   (`docker ps web-01`). Otherwise it's the most readable line near the top —
+   scored for real words, penalised for identifier soup, query strings, and
+   OCR-mangled Thai.
+4. **Slugify** to ASCII, dropping UI chrome (`search`, `dashboard`, `edit`), capped
+   at 70 characters.
 
-Filenames keep the capture time from the original name, so they survive copies,
-and the Thai Buddhist year is converted (`2569` → `2026`).
+Built-in topics: monitoring (Grafana, Zabbix), testing (JMeter), ci-cd (GitHub
+Actions, GitLab, Jenkins), auth (Keycloak), database (DBeaver, Postgres), chat
+(Teams, Slack), docs (Confluence, Notion), terminal, errors, code, learning.
 
-## Layout
+Capture time comes from the original filename, so it survives copies and mail
+attachments, and the Thai Buddhist year is converted (`2569` → `2026`).
 
-`--layout` (or `shots config --layout …`):
+## Layouts
 
-| mode | result |
+| `--layout` | Result |
 | --- | --- |
 | `day` (default) | `~/Screenshots/2026-11-06/2026-11-06-1345-grafana-cpu.png` |
 | `topic` | `~/Screenshots/monitoring/2026-11-06-1345-grafana-cpu.png` |
 | `both` | `~/Screenshots/monitoring/2026-11-06/2026-11-06-1345-grafana-cpu.png` |
 
-## Config
+## Teaching it your projects
 
-`~/.config/shots/config.json` (`shots config --edit`):
+`~/.config/shots/config.json` — your rules are checked first, and one keyword is
+enough to match:
 
 ```json
 {
@@ -153,30 +117,90 @@ and the Thai Buddhist year is converted (`2569` → `2026`).
 }
 ```
 
-Your own rules are checked first and one keyword is enough to match, so a single
-line of JSON teaches the tool a new project:
-
 ```sh
+shots config --edit
 shots config --add-source ~/Downloads
 shots config --layout topic
 ```
 
+## Command reference
+
+| Command | What it does |
+| --- | --- |
+| `shots plan` | Dry run: prints every source → destination, grouped by folder. |
+| `shots apply --yes` | Performs the plan and writes an undo journal. |
+| `shots undo` | Reverts the last batch, restoring original names and locations. Run again to go further back. |
+| `shots list` | Past batches, newest first. |
+| `shots watch` | Loop that files new screenshots. `--interval N`, min 5, default 30. |
+| `shots agent install\|status\|log\|uninstall` | launchd job that runs `watch` at login. |
+| `shots config [--print\|--edit\|--layout\|--add-source\|--destination]` | Read or change settings. |
+| `shots debug PATH` | Dump OCR lines, Vision labels and the chosen name — for when a name looks wrong. |
+| `shots version` | Version. |
+
+Flags for `plan`, `apply`, `watch`:
+
+| Flag | Meaning |
+| --- | --- |
+| `-d`, `--dir DIR` | Folder to scan. Repeatable. Defaults to the config's `sources`. |
+| `--to DIR` | Destination root for this run only. |
+| `--layout MODE` | `day`, `topic` or `both` for this run only. |
+| `--all` | Also move images that don't look like screenshots. |
+| `-y`, `--yes` | Required for `apply` to move anything. |
+| `--json` | Plan as JSON, for scripting. |
+| `-q`, `--quiet` | No progress output. |
+
+The app also takes `--once` (scan, file, exit) and `--preview out.png` (render the
+popover headlessly).
+
 ## Safety
 
+Screenshots are work you can't regenerate, so the defaults are conservative:
+
 - `plan` never touches files; `apply` requires `--yes`.
-- Only files named `Screenshot …` / `CleanShot …` / `capture …` are moved by
-  default. `--all` opts other images in.
-- Byte-identical duplicates are reported and left in place.
-- Nothing is ever overwritten: collisions become `-2`, `-3`, and a second
-  candidate title is preferred over a numeric suffix when one exists.
-- Every applied batch is journaled in `~/.local/share/shots/`, so `shots undo`
-  restores exact original names and locations.
-- Photos on the Desktop are left alone and, if you pass `--all`, go to `images/`.
+- Only files named `Screenshot …`, `CleanShot …`, `capture …` etc. are moved.
+  `--all` opts other images in; photos then go to `images/`.
+- Byte-identical duplicates are reported and left alone.
+- Nothing is ever overwritten. Collisions get `-2`, `-3`, and a different candidate
+  title is preferred over a numeric suffix when one exists.
+- Every batch is journaled, so `undo` restores exact original names and paths.
+
+## Where things live
+
+| Path | Contents |
+| --- | --- |
+| `~/.config/shots/config.json` | Settings and custom rules. Shared by app and CLI. |
+| `~/.local/share/shots/journal-*.json` | One per applied batch; `undo` consumes them. |
+| `~/.local/share/shots/agent.log` | Output from the launchd job. |
+| `~/Library/LaunchAgents/com.teveus.shots.plist` | The launchd job, if installed. |
 
 ## Development
 
+```
+Sources/ShotsCore/    engine: Vision analysis, naming, planning, journaling
+Sources/shots/        CLI
+Sources/ShotsApp/     menu-bar app (AppKit)
+Sources/shots-selftest/  self-checks, since this toolchain has no XCTest
+```
+
 ```sh
 swift build -c release
-swift run shots-selftest     # 17 checks over routing and naming
-swift run shots debug ~/Desktop/some-shot.png   # OCR dump + why it was named that way
+swift run shots-selftest                        # routing and naming checks
+swift run shots debug ~/Desktop/some-shot.png   # why was it named that?
+.build/release/ShotsApp --preview /tmp/ui.png   # check UI layout without clicking
 ```
+
+The app is AppKit rather than SwiftUI because a CommandLineTools-only toolchain
+ships without SwiftUI's macro plugin, so `@State`/`@Published` fail to expand.
+AppKit needs nothing extra and builds anywhere. With full Xcode installed,
+`swift build` works unchanged.
+
+Name lists live in `Sources/ShotsCore/Namer.swift`. Adding a topic is one entry:
+
+```swift
+Rule(folder: "infra", tag: "terraform",
+     weighted: ["terraform apply": 5, "plan:": 2, "aws_": 2])
+```
+
+## License
+
+MIT — see [LICENSE](LICENSE).
