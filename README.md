@@ -1,5 +1,7 @@
 # shots
 
+[![CI](https://github.com/stawan15/shots/actions/workflows/ci.yml/badge.svg)](https://github.com/stawan15/shots/actions/workflows/ci.yml)
+
 **Your screenshots, named and filed by what's actually in them.**
 
 A macOS menu-bar app and CLI that reads each screenshot with on-device Vision OCR,
